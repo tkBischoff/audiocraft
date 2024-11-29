@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 TextCondition = tp.Optional[str]  # a text condition can be a string or None (if doesn't exist)
 ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # condition, mask
 
+class EmotionCondition(tp.NamedTuple):
+    arousal: float
+    valence: float
+
 
 class WavCondition(tp.NamedTuple):
     wav: torch.Tensor
@@ -65,6 +69,7 @@ class JointEmbedCondition(tp.NamedTuple):
 class ConditioningAttributes:
     text: tp.Dict[str, tp.Optional[str]] = field(default_factory=dict)
     wav: tp.Dict[str, WavCondition] = field(default_factory=dict)
+    emotion: tp.Dict[str, EmotionCondition] = field(default_factory=dict)
     joint_embed: tp.Dict[str, JointEmbedCondition] = field(default_factory=dict)
 
     def __getitem__(self, item):
@@ -79,6 +84,10 @@ class ConditioningAttributes:
         return self.wav.keys()
 
     @property
+    def emotion_attributes(self):
+        return self.emotion.keys()
+
+    @property
     def joint_embed_attributes(self):
         return self.joint_embed.keys()
 
@@ -88,12 +97,14 @@ class ConditioningAttributes:
             "text": self.text_attributes,
             "wav": self.wav_attributes,
             "joint_embed": self.joint_embed_attributes,
+            "emotion": self.emotion,
         }
 
     def to_flat_dict(self):
         return {
             **{f"text.{k}": v for k, v in self.text.items()},
             **{f"wav.{k}": v for k, v in self.wav.items()},
+            **{f"emotion.{k}": v for k, v in self.emotion.items()},
             **{f"joint_embed.{k}": v for k, v in self.joint_embed.items()}
         }
 
