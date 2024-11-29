@@ -120,7 +120,7 @@ def load_lm_model(file_or_url_or_id: tp.Union[Path, str], device='cpu', cache_di
     _delete_param(cfg, 'conditioners.args.merge_text_conditions_p')
     _delete_param(cfg, 'conditioners.args.drop_desc_p')
     model = builders.get_lm_model(cfg)
-    model.load_state_dict(pkg['best_state'])
+    model.load_state_dict(pkg['best_state'], strict=False)
     model.eval()
     model.cfg = cfg
     return model

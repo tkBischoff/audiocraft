@@ -175,6 +175,7 @@ class LMModel(StreamingModule):
         self._init_weights(weight_init, depthwise_init, zero_bias_init)
         self._fsdp: tp.Optional[nn.Module]
         self.__dict__['_fsdp'] = None
+        self.emotional_embedding = nn.Linear(2, hidden_scale*dim)
 
     def _init_weights(self, weight_init: tp.Optional[str], depthwise_init: tp.Optional[str], zero_bias_init: bool):
         """Initialization of the transformer module weights.
