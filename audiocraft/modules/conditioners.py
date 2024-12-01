@@ -376,7 +376,9 @@ class EmotionConditioner(BaseConditioner):
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
         tokens = inputs['emotions_values'].float()
         mask = inputs['attention_mask'].float()
-        return self.output_proj(tokens), mask
+
+        proj = self.output_proj(tokens).unsqueeze(1)
+        return proj, mask
 
 
 
@@ -1650,7 +1652,8 @@ class ConditioningProvider(nn.Module):
 
 
 class ConditionFuser(StreamingModule):
-    """Condition fuser handles the logic to combine the different conditions
+    """
+    Condition fuser handles the logic to combine the different conditions
     to the actual model input.
 
     Args:
