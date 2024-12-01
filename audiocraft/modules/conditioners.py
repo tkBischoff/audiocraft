@@ -312,7 +312,8 @@ class NoopTokenizer(Tokenizer):
 
 
 class BaseConditioner(nn.Module):
-    """Base model for all conditioner modules.
+    """
+    Base model for all conditioner modules.
     We allow the output dim to be different than the hidden dim for two reasons:
     1) keep our LUTs small when the vocab is large;
     2) make all condition dims consistent.
@@ -328,7 +329,8 @@ class BaseConditioner(nn.Module):
         self.output_proj = nn.Linear(dim, output_dim)
 
     def tokenize(self, *args, **kwargs) -> tp.Any:
-        """Should be any part of the processing that will lead to a synchronization
+        """
+        Should be any part of the processing that will lead to a synchronization
         point, e.g. BPE tokenization with transfer to the GPU.
 
         The returned value will be saved and return later when calling forward().
@@ -336,7 +338,8 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
     def forward(self, inputs: tp.Any) -> ConditionType:
-        """Gets input that should be used as conditioning (e.g, genre, description or a waveform).
+        """
+        Gets input that should be used as conditioning (e.g, genre, description or a waveform).
         Outputs a ConditionType, after the input data was embedded as a dense vector.
 
         Returns:
@@ -348,7 +351,25 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
 
+class EmotionConditioner(BaseConditioner):
+    """
+    
+    """
+    def __init__(self):
+        super().__init__(2, 1024)
+
+    def tokenize(self, x: EmotionCondition) -> EmotionCondition:
+        return x
+
+    def forward(self, x: EmotionCondition) -> ConditionType:
+        inp = torch.tensor([x.arousal, x.valence])
+
+        return self.output_proj(inp)
+
+
+
 class TextConditioner(BaseConditioner):
+        return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
     ...
 
 
@@ -1269,12 +1290,13 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
 
 
 def dropout_condition(sample: ConditioningAttributes, condition_type: str, condition: str) -> ConditioningAttributes:
-    """Utility function for nullifying an attribute inside an ConditioningAttributes object.
+    """
+    Utility function for nullifying an attribute inside an ConditioningAttributes object.
     If the condition is of type "wav", then nullify it using `nullify_condition` function.
     If the condition is of any other type, set its value to None.
     Works in-place.
     """
-    if condition_type not in ['text', 'wav', 'joint_embed']:
+    if condition_type not in ['text', 'wav', 'joint_embed', 'emotion']:
         raise ValueError(
             "dropout_condition got an unexpected condition type!"
             f" expected 'text', 'wav' or 'joint_embed' but got '{condition_type}'"
@@ -1290,6 +1312,8 @@ def dropout_condition(sample: ConditioningAttributes, condition_type: str, condi
     if condition_type == 'wav':
         wav_cond = sample.wav[condition]
         sample.wav[condition] = nullify_wav(wav_cond)
+    elif condition_type == 'emotion':
+        sample.emotion[condition] = None
     elif condition_type == 'joint_embed':
         embed = sample.joint_embed[condition]
         sample.joint_embed[condition] = nullify_joint_embed(embed)
@@ -1383,7 +1407,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
 
         # nullify conditions of all attributes
         samples = deepcopy(samples)
-        for condition_type in ["wav", "text"]:
+        for condition_type in ["wav", "text", "emotion"]:
             for sample in samples:
                 for condition in sample.attributes[condition_type]:
                     dropout_condition(sample, condition_type, condition)
@@ -1414,6 +1438,10 @@ class ConditioningProvider(nn.Module):
         return len(self.joint_embed_conditions) > 0
 
     @property
+    def emotion_conditions(self):
+        return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
+
+    @property
     def text_conditions(self):
         return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
 
@@ -1426,18 +1454,19 @@ class ConditioningProvider(nn.Module):
         return len(self.wav_conditions) > 0
 
     def tokenize(self, inputs: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.Any]:
-        """Match attributes/wavs with existing conditioners in self, and compute tokenize them accordingly.
+        """
+        Match attributes/wavs with existing conditioners in self, and compute tokenize them accordingly.
         This should be called before starting any real GPU work to avoid synchronization points.
         This will return a dict matching conditioner names to their arbitrary tokenized representations.
 
         Args:
             inputs (list[ConditioningAttributes]): List of ConditioningAttributes objects containing
-                text and wav conditions.
+                text, wav and emotion conditions.
         """
-        assert all([isinstance(x, ConditioningAttributes) for x in inputs]), (
-            "Got unexpected types input for conditioner! should be tp.List[ConditioningAttributes]",
-            f" but types were {set([type(x) for x in inputs])}"
-        )
+        #assert all([isinstance(x, ConditioningAttributes) for x in inputs]), (
+        #    "Got unexpected types input for conditioner! should be tp.List[ConditioningAttributes]",
+        #    f" but types were {set([type(x) for x in inputs])}"
+        #)
 
         output = {}
         text = self._collate_text(inputs)
@@ -1454,7 +1483,8 @@ class ConditioningProvider(nn.Module):
         return output
 
     def forward(self, tokenized: tp.Dict[str, tp.Any]) -> tp.Dict[str, ConditionType]:
-        """Compute pairs of `(embedding, mask)` using the configured conditioners and the tokenized representations.
+        """
+        Compute pairs of `(embedding, mask)` using the configured conditioners and the tokenized representations.
         The output is for example:
         {
             "genre": (torch.Tensor([B, 1, D_genre]), torch.Tensor([B, 1])),
@@ -1471,8 +1501,16 @@ class ConditioningProvider(nn.Module):
             output[attribute] = (condition, mask)
         return output
 
+    def _collate_emotions(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, EmotionCondition]:
+        out: tp.Dict[str, EmotionCondition] = defaultdict(list)
+        emotions = [x.emotion for x in samples]
+        #for emotion in emotions:
+        #    for condition in self.emo
+
+
     def _collate_text(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
-        """Given a list of ConditioningAttributes objects, compile a dictionary where the keys
+        """
+        Given a list of ConditioningAttributes objects, compile a dictionary where the keys
         are the attributes and the values are the aggregated input per attribute.
         For example:
         Input:
