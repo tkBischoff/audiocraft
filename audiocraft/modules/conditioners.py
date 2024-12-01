@@ -355,21 +355,30 @@ class EmotionConditioner(BaseConditioner):
     """
     
     """
-    def __init__(self):
-        super().__init__(2, 1024)
+    def __init__(self, output_dim: int):
+        super().__init__(2, output_dim)
 
-    def tokenize(self, x: EmotionCondition) -> EmotionCondition:
-        return x
+    def tokenize(self, x: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
+        emotion_values = []
+        mask = []
+        for emotion in x:
+            if emotion is not None:
+                emotion_values.append([emotion.arousal, emotion.valence])
+                mask.append(1)
+            else:
+                emotion_values.append([0, 0])
+                mask.append(0)
+        return {
+            'emotions_values': torch.tensor(emotion_values),
+            'attention_mask': torch.tensor(mask)
+        }
 
     def forward(self, x: EmotionCondition) -> ConditionType:
-        inp = torch.tensor([x.arousal, x.valence])
-
-        return self.output_proj(inp)
+        return self.output_proj(x)
 
 
 
 class TextConditioner(BaseConditioner):
-        return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
     ...
 
 
@@ -1439,7 +1448,8 @@ class ConditioningProvider(nn.Module):
 
     @property
     def emotion_conditions(self):
-        return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
+        #return [k for k, v in self.conditioners.items() if isinstance(v, EmotionConditioner)]
+        return ['emotion']
 
     @property
     def text_conditions(self):
@@ -1471,14 +1481,15 @@ class ConditioningProvider(nn.Module):
         output = {}
         text = self._collate_text(inputs)
         wavs = self._collate_wavs(inputs)
+        emotions = self._collate_emotions(inputs)
         joint_embeds = self._collate_joint_embeds(inputs)
 
-        assert set(text.keys() | wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
+        assert set(text.keys() | wavs.keys() | joint_embeds.keys() | emotions.keys()).issubset(set(self.conditioners.keys())), (
             f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
             f"got {text.keys(), wavs.keys(), joint_embeds.keys()}"
         )
 
-        for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items()):
+        for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items(), emotions.items()):
             output[attribute] = self.conditioners[attribute].tokenize(batch)
         return output
 
@@ -1504,8 +1515,10 @@ class ConditioningProvider(nn.Module):
     def _collate_emotions(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, EmotionCondition]:
         out: tp.Dict[str, EmotionCondition] = defaultdict(list)
         emotions = [x.emotion for x in samples]
-        #for emotion in emotions:
-        #    for condition in self.emo
+        for emotion in emotions:
+            for condition in self.emotion_conditions:
+                out[condition].append(emotion[condition])
+        return out
 
 
     def _collate_text(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
