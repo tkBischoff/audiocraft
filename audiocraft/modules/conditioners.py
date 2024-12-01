@@ -373,8 +373,10 @@ class EmotionConditioner(BaseConditioner):
             'attention_mask': torch.tensor(mask)
         }
 
-    def forward(self, x: EmotionCondition) -> ConditionType:
-        return self.output_proj(x)
+    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
+        tokens = inputs['emotions_values'].float()
+        mask = inputs['attention_mask'].float()
+        return self.output_proj(tokens), mask
 
 
 
