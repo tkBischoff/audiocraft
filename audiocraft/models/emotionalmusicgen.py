@@ -142,7 +142,7 @@ class EmotionalMusicGen(BaseGenModel):
 
     def generate_with_emotions(
             self, 
-            emotions: tp.List[tp.Tuple[float, float]],
+            emotions: tp.List[EmotionCondition],
             progress: bool=False, 
             return_tokens: bool=False
         ) -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
@@ -150,15 +150,25 @@ class EmotionalMusicGen(BaseGenModel):
         Generates samples conditioned on emotional parameters.
 
         Args:
-            emotions (float, float) : A list of tuples, each tuple representing (arousal, valence)
+            emotions (EmotionCondition) : A list of emotional conditions, each
+            conaining arousal and valence
             progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
         """
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(emotions, None)
+        assert prompt_tokens is None
+        
+        tokens = self._generate_tokens(attributes, prompt_tokens, progress)
+
+        if return_tokens:
+            return self.generate_audio(tokens), tokens
+        
+        return self.generate_audio(tokens)
 
 
     @torch.no_grad()
     def _prepare_tokens_and_attributes(
             self,
-            emotions: tp.List[tp.Tuple[float, float]],
+            emotions: tp.List[EmotionCondition],
             prompt: tp.Optional[torch.Tensor],
     ) -> tp.Tuple[tp.List[ConditioningAttributes], tp.Optional[torch.Tensor]]:
         """Prepare model inputs.
@@ -169,7 +179,8 @@ class EmotionalMusicGen(BaseGenModel):
         """
         attributes = [
             ConditioningAttributes(
-                emotion=EmotionCondition(arousal=emotion[0], valence=emotion[1])
+                emotion={'emotion': emotion},
+                text={'description': None}
             )
             for emotion in emotions
         ]
