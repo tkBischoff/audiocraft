@@ -206,7 +206,10 @@ class MusicGen(BaseGenModel):
                 used as melody conditioning. Defaults to None.
         """
         attributes = [
-            ConditioningAttributes(text={'description': description})
+            ConditioningAttributes(
+                text={'description': description},
+                emotion={'emotion': None}
+            )
             for description in descriptions]
 
         if melody_wavs is None:
