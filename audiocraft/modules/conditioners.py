@@ -44,8 +44,8 @@ TextCondition = tp.Optional[str]  # a text condition can be a string or None (if
 ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # condition, mask
 
 class EmotionCondition(tp.NamedTuple):
-    arousal: float
-    valence: float
+    arousal: torch.Tensor
+    valence: torch.Tensor
 
 
 class WavCondition(tp.NamedTuple):
@@ -366,24 +366,19 @@ class EmotionConditioner(BaseConditioner):
         for _ in range(num_layers-1):
             self.layer_list.append(nn.Linear(hidden_dim, hidden_dim))
 
-    def tokenize(self, x: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
-        emotion_values = []
-        mask = []
-        for emotion in x:
-            if emotion is not None:
-                emotion_values.append([emotion.arousal, emotion.valence])
-                mask.append(1)
-            else:
-                emotion_values.append([0, 0])
-                mask.append(0)
+    def tokenize(self, x: EmotionCondition) -> tp.Dict[str, torch.Tensor]:
+        assert len(x.arousal) == len(x.valence)
+
+        emotions = torch.stack((x.arousal, x.valence), dim=1)
+        mask = torch.ones(len(x.arousal))
+
         return {
-            'emotions_values': torch.tensor(emotion_values),
-            'attention_mask': torch.tensor(mask)
+            'emotion_values': emotions,
+            'attention_mask': mask
         }
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        x = inputs['emotions_values'].float()
-        #mask = inputs['attention_mask'].float()
+        x = inputs['emotion_values'].float()
         mask = torch.ones(self.output_dim)
 
         for layer in self.layer_list:
