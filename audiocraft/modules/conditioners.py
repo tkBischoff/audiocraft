@@ -352,11 +352,19 @@ class BaseConditioner(nn.Module):
 
 
 class EmotionConditioner(BaseConditioner):
-    """
-    
-    """
-    def __init__(self, output_dim: int):
-        super().__init__(2, output_dim)
+    def __init__(self, num_layers: int, hidden_dim: int, output_dim: int):
+        assert num_layers >= 1, 'need at least one hidden layer'
+        super().__init__(hidden_dim, output_dim)
+        self.output_dim = output_dim
+
+        # initialize with one hidden layer
+        self.layer_list = nn.ModuleList([
+            nn.Linear(2, hidden_dim)
+        ])
+
+        # initialize the other hidden layers
+        for _ in range(num_layers-1):
+            self.layer_list.append(nn.Linear(hidden_dim, hidden_dim))
 
     def tokenize(self, x: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
         emotion_values = []
@@ -374,10 +382,14 @@ class EmotionConditioner(BaseConditioner):
         }
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        tokens = inputs['emotions_values'].float()
-        mask = inputs['attention_mask'].float()
+        x = inputs['emotions_values'].float()
+        #mask = inputs['attention_mask'].float()
+        mask = torch.ones(self.output_dim)
 
-        proj = self.output_proj(tokens).unsqueeze(1)
+        for layer in self.layer_list:
+            x = layer(x)
+
+        proj = self.output_proj(x).unsqueeze(1)
         return proj, mask
 
 
@@ -669,6 +681,7 @@ class ChromaStemConditioner(WaveformConditioner):
         with self.autocast:
             wav = convert_audio(
                 wav, sample_rate, self.demucs.samplerate, self.demucs.audio_channels)  # type: ignore
+    
             stems = apply_model(self.demucs, wav, device=self.device)  # type: ignore
             stems = stems[:, self.stem_indices]  # extract relevant stems for melody conditioning
             mix_wav = stems.sum(1)  # merge extracted stems to single waveform
@@ -1483,8 +1496,10 @@ class ConditioningProvider(nn.Module):
         #)
 
         output = {}
-        text = self._collate_text(inputs)
-        wavs = self._collate_wavs(inputs)
+        #text = self._collate_text(inputs)
+        #wavs = self._collate_wavs(inputs)
+        text = {}
+        wavs = {}
         emotions = self._collate_emotions(inputs)
         joint_embeds = self._collate_joint_embeds(inputs)
 
@@ -1517,12 +1532,17 @@ class ConditioningProvider(nn.Module):
         return output
 
     def _collate_emotions(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, EmotionCondition]:
-        out: tp.Dict[str, EmotionCondition] = defaultdict(list)
-        emotions = [x.emotion for x in samples]
-        for emotion in emotions:
-            for condition in self.emotion_conditions:
-                out[condition].append(emotion[condition])
+        #out: tp.Dict[str, EmotionCondition] = defaultdict(list)
+
+        emotions = [x for x in samples]
+        out = {'emotion': emotions}
+        print(out)
         return out
+    
+        #for emotion in emotions:
+        #    for condition in self.emotion_conditions:
+        #        out[condition].append(emotion[condition])
+        #return out
 
 
     def _collate_text(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
