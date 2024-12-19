@@ -352,7 +352,7 @@ class BaseConditioner(nn.Module):
 
 
 class EmotionConditioner(BaseConditioner):
-    def __init__(self, num_layers: int, hidden_dim: int, output_dim: int):
+    def __init__(self, num_layers: int, hidden_dim: int, output_dim: int, dropout: float, hidden_dropout: float):
         assert num_layers >= 1, 'need at least one hidden layer'
         super().__init__(hidden_dim, output_dim)
         self.output_dim = output_dim
@@ -365,6 +365,10 @@ class EmotionConditioner(BaseConditioner):
         # initialize the other hidden layers
         for _ in range(num_layers-1):
             self.layer_list.append(nn.Linear(hidden_dim, hidden_dim))
+
+        # dropout
+        self.dropout = nn.Dropout(p=dropout)
+        self.hidden_dropout = nn.Dropout(p=hidden_dropout)
 
     def tokenize(self, emotions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
         """
@@ -395,7 +399,13 @@ class EmotionConditioner(BaseConditioner):
 
         mask = torch.ones(x.shape[0], self.output_dim)
 
+        # apply dropout
+        self.x = self.dropout(x)
+
         for layer in self.layer_list:
+            # for every leyer but the first apply hidden dropout
+            if layer != self.layer_list[0]:
+                x = self.hidden_dropout(x)
             x = layer(x)
 
         proj = self.output_proj(x).unsqueeze(1)
