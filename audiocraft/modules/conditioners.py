@@ -390,7 +390,8 @@ class EmotionConditioner(BaseConditioner):
         arousal = torch.tensor(arousal)
         valence = torch.tensor(valence)
 
-        x = torch.stack((arousal, valence), dim=1).float()
+        device = next(self.output_proj.parameters()).device
+        x = torch.stack((arousal, valence), dim=1).float().to(device)
 
         mask = torch.ones(x.shape[0], self.output_dim)
 
