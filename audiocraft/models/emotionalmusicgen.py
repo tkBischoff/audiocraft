@@ -168,7 +168,8 @@ class EmotionalMusicGen(BaseGenModel):
     @torch.no_grad()
     def _prepare_tokens_and_attributes(
             self,
-            emotions: tp.List[EmotionCondition],
+            arousal_values: tp.List[float],
+            valence_values: tp.List[float],
             prompt: tp.Optional[torch.Tensor],
     ) -> tp.Tuple[tp.List[ConditioningAttributes], tp.Optional[torch.Tensor]]:
         """Prepare model inputs.
@@ -177,17 +178,23 @@ class EmotionalMusicGen(BaseGenModel):
             emotions (float, float) : A list of tuples, each tuple representing (arousal, valence)
             prompt (torch.Tensor): A batch of waveforms used for continuation.
         """
-        attributes = [
-            ConditioningAttributes(
-                emotion={'emotion': emotion},
-                text={'description': None}
+        assert len(arousal_values) == len(valence_values)
+
+        attributes = []
+        for arousal, valence in zip(arousal_values, valence_values):
+            attributes.append(
+                ConditioningAttributes(
+                    emotion={'emotion': EmotionCondition(
+                        arousal=arousal,
+                        valence=valence)
+                    },
+                    text={'description': None}
+                )
             )
-            for emotion in emotions
-        ]
 
         if prompt is not None:
-            if emotions is not None:
-                assert len(emotions) == len(prompt), "Prompt and nb. emotions doesn't match"
+            if arousal_values is not None:
+                assert len(arousal_values) == len(prompt), "Prompt and nb. emotions doesn't match"
             prompt = prompt.to(self.device)
             prompt_tokens, scale = self.compression_model.encode(prompt)
             assert scale is None

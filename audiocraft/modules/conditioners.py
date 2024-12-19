@@ -366,11 +366,13 @@ class EmotionConditioner(BaseConditioner):
         for _ in range(num_layers-1):
             self.layer_list.append(nn.Linear(hidden_dim, hidden_dim))
 
-    def tokenize(self, x: EmotionCondition) -> tp.Dict[str, torch.Tensor]:
-        assert len(x.arousal) == len(x.valence)
+    def tokenize(self, emotions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
+        """
+        There is no point in tokenizing the emotional values,
+        this is just to keep in line with the API
+        """
 
-        emotions = torch.stack((x.arousal, x.valence), dim=1)
-        mask = torch.ones(len(x.arousal))
+        mask = torch.ones(len(emotions))
 
         return {
             'emotion_values': emotions,
@@ -378,8 +380,19 @@ class EmotionConditioner(BaseConditioner):
         }
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        x = inputs['emotion_values'].float()
-        mask = torch.ones(self.output_dim)
+        arousal = []
+        valence = []
+
+        for attributes in inputs['emotion_values']:
+            arousal.append(attributes.emotion['emotion'].arousal)
+            valence.append(attributes.emotion['emotion'].valence)
+
+        arousal = torch.tensor(arousal)
+        valence = torch.tensor(valence)
+
+        x = torch.stack((arousal, valence), dim=1).float()
+
+        mask = torch.ones(x.shape[0], self.output_dim)
 
         for layer in self.layer_list:
             x = layer(x)
@@ -1531,14 +1544,8 @@ class ConditioningProvider(nn.Module):
 
         emotions = [x for x in samples]
         out = {'emotion': emotions}
-        print(out)
         return out
     
-        #for emotion in emotions:
-        #    for condition in self.emotion_conditions:
-        #        out[condition].append(emotion[condition])
-        #return out
-
 
     def _collate_text(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
         """
