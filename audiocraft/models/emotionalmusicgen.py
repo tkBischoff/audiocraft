@@ -142,7 +142,8 @@ class EmotionalMusicGen(BaseGenModel):
 
     def generate_with_emotions(
             self, 
-            emotions: tp.List[EmotionCondition],
+            arousal_values: tp.List[float],
+            valence_values: tp.List[float],
             progress: bool=False, 
             return_tokens: bool=False
         ) -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
@@ -154,7 +155,7 @@ class EmotionalMusicGen(BaseGenModel):
             conaining arousal and valence
             progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
         """
-        attributes, prompt_tokens = self._prepare_tokens_and_attributes(emotions, None)
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(arousal_values, valence_values, None)
         assert prompt_tokens is None
         
         tokens = self._generate_tokens(attributes, prompt_tokens, progress)
