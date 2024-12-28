@@ -351,64 +351,73 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
 
+
 class EmotionConditioner(BaseConditioner):
-    def __init__(self, num_layers: int, hidden_dim: int, output_dim: int, dropout: float, hidden_dropout: float):
-        assert num_layers >= 1, 'need at least one hidden layer'
+    def __init__(self, num_hidden_layers: int, n_encodings: int, hidden_dim: int, output_dim: int, dropout: float):
+        assert num_hidden_layers >= 1, 'need at least one hidden layer'
         super().__init__(hidden_dim, output_dim)
         self.output_dim = output_dim
+        self.dropout = nn.Dropout(p=dropout)
+        self.n_encodings = n_encodings
 
-        # initialize with one hidden layer
-        self.layer_list = nn.ModuleList([
-            nn.Linear(2, hidden_dim)
+        # initial embedding
+        self.layers = nn.ModuleList([
+            nn.ModuleList(
+                [nn.Linear(2, output_dim) for _ in range(self.n_encodings)]
+            )
         ])
 
-        # initialize the other hidden layers
-        for _ in range(num_layers-1):
-            self.layer_list.append(nn.Linear(hidden_dim, hidden_dim))
+        # hidden layers
+        for i in range(num_hidden_layers-1):
+            self.layers.append(
+                nn.ModuleList(
+                    [nn.Linear(hidden_dim, hidden_dim) for _ in range(self.n_encodings)]
+                )
+            )
 
-        # dropout
-        self.dropout = nn.Dropout(p=dropout)
-        self.hidden_dropout = nn.Dropout(p=hidden_dropout)
+        # output layers
+        self.layers.append(
+            nn.ModuleList(
+                [nn.Linear(hidden_dim, output_dim) for _ in range(self.n_encodings)]
+            )
+        )
 
-    def tokenize(self, emotions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
+    def tokenize(self, conditions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
         """
         There is no point in tokenizing the emotional values,
         this is just to keep in line with the API
         """
+        arousal = []
+        valence = []
 
-        mask = torch.ones(len(emotions))
+        for condition in conditions:
+            arousal.append(condition.emotion['emotion'].arousal)
+            valence.append(condition.emotion['emotion'].valence)
+
+        arousal = torch.tensor(arousal)
+        valence = torch.tensor(valence)
+        x = torch.stack((arousal, valence), dim=1).float()
+
+        mask = torch.ones(len(arousal))
 
         return {
-            'emotion_values': emotions,
+            'emotion_values': x,
             'attention_mask': mask
         }
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        arousal = []
-        valence = []
-
-        for attributes in inputs['emotion_values']:
-            arousal.append(attributes.emotion['emotion'].arousal)
-            valence.append(attributes.emotion['emotion'].valence)
-
-        arousal = torch.tensor(arousal)
-        valence = torch.tensor(valence)
-
-        device = next(self.output_proj.parameters()).device
-        x = torch.stack((arousal, valence), dim=1).float().to(device)
-
+        x = inputs['emotion_values']
         mask = torch.ones(x.shape[0], self.output_dim)
 
-        # apply dropout
-        self.x = self.dropout(x)
+        embeddings = [x for _ in range(self.n_encodings)]
 
-        for layer in self.layer_list:
-            # for every leyer but the first apply hidden dropout
-            if layer != self.layer_list[0]:
-                x = self.hidden_dropout(x)
-            x = layer(x)
+        for layer in self.layers:
+            for i in range(self.n_encodings):
+                embeddings[i] = layer[i](embeddings[i])
+                embeddings[i] = self.dropout(embeddings[i])
 
-        proj = self.output_proj(x).unsqueeze(1)
+        proj = torch.stack(embeddings, dim=1)
+
         return proj, mask
 
 
