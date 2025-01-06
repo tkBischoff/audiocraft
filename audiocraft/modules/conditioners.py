@@ -354,7 +354,6 @@ class BaseConditioner(nn.Module):
 
 class EmotionConditioner(BaseConditioner):
     def __init__(self, num_hidden_layers: int, n_encodings: int, hidden_dim: int, output_dim: int, dropout: float):
-        assert num_hidden_layers >= 1, 'need at least one hidden layer'
         super().__init__(hidden_dim, output_dim)
         self.output_dim = output_dim
         self.dropout = nn.Dropout(p=dropout)
@@ -363,7 +362,7 @@ class EmotionConditioner(BaseConditioner):
         # initial embedding
         self.layers = nn.ModuleList([
             nn.ModuleList(
-                [nn.Linear(2, output_dim) for _ in range(self.n_encodings)]
+                [nn.Linear(2, hidden_dim) for _ in range(self.n_encodings)]
             )
         ])
 
