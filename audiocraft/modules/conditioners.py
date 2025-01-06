@@ -358,6 +358,7 @@ class EmotionConditioner(BaseConditioner):
         self.output_dim = output_dim
         self.dropout = nn.Dropout(p=dropout)
         self.n_encodings = n_encodings
+        self.relu = nn.ReLU()
 
         # initial embedding
         self.layers = nn.ModuleList([
@@ -367,7 +368,7 @@ class EmotionConditioner(BaseConditioner):
         ])
 
         # hidden layers
-        for i in range(num_hidden_layers-1):
+        for _ in range(num_hidden_layers-1):
             self.layers.append(
                 nn.ModuleList(
                     [nn.Linear(hidden_dim, hidden_dim) for _ in range(self.n_encodings)]
@@ -413,6 +414,7 @@ class EmotionConditioner(BaseConditioner):
         for layer in self.layers:
             for i in range(self.n_encodings):
                 embeddings[i] = layer[i](embeddings[i])
+                embeddings[i] = self.relu(embeddings[i])
                 embeddings[i] = self.dropout(embeddings[i])
 
         proj = torch.stack(embeddings, dim=1)
