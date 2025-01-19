@@ -351,36 +351,29 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
 
+import torch
+import typing as tp
+from torch import nn
+from audiocraft.modules.conditioners import BaseConditioner, EmotionCondition, ConditionType
+from lightning.pytorch import LightningModule
 
-class EmotionConditioner(BaseConditioner):
-    def __init__(self, num_hidden_layers: int, n_encodings: int, hidden_dim: int, output_dim: int, dropout: float):
-        super().__init__(hidden_dim, output_dim)
+class EmotionConditioner(LightningModule):
+    def __init__(self, n_tokens: int, output_dim: int, dropout: float):
+        super().__init__()
         self.output_dim = output_dim
         self.dropout = nn.Dropout(p=dropout)
-        self.n_encodings = n_encodings
+        self.n_tokens = n_tokens
         self.relu = nn.ReLU()
+        self.save_hyperparameters()
 
-        # initial embedding
+        total_output_size = n_tokens * 3 * output_dim
+
         self.layers = nn.ModuleList([
-            nn.ModuleList(
-                [nn.Linear(2, hidden_dim) for _ in range(self.n_encodings)]
-            )
+            nn.Linear(2, 512),
+            nn.Linear(512, 1024),
+            nn.Linear(1024, 1536),
+            nn.Linear(1536, total_output_size)
         ])
-
-        # hidden layers
-        for _ in range(num_hidden_layers-1):
-            self.layers.append(
-                nn.ModuleList(
-                    [nn.Linear(hidden_dim, hidden_dim) for _ in range(self.n_encodings)]
-                )
-            )
-
-        # output layers
-        self.layers.append(
-            nn.ModuleList(
-                [nn.Linear(hidden_dim, output_dim) for _ in range(self.n_encodings)]
-            )
-        )
 
     def tokenize(self, conditions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
         """
@@ -407,20 +400,26 @@ class EmotionConditioner(BaseConditioner):
 
     def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
         x = inputs['emotion_values']
-        mask = torch.ones(x.shape[0], self.output_dim)
 
-        embeddings = [x for _ in range(self.n_encodings)]
-
+        out = x
         for layer in self.layers:
-            for i in range(self.n_encodings):
-                embeddings[i] = layer[i](embeddings[i])
-                embeddings[i] = self.relu(embeddings[i])
-                embeddings[i] = self.dropout(embeddings[i])
+            out = layer(out)
+            out = self.relu(out)
+            out = self.dropout(out)
 
-        proj = torch.stack(embeddings, dim=1)
+        out = out.view(self.n_tokens, 3, self.output_dim)
+        mask = torch.ones(self.n_tokens, 3, self.output_dim)
 
-        return proj, mask
+        return out, mask
 
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        input_ids = x['input_ids']
+        attention_mask = x['attention_mask']
+        y_hat = self(input_ids, attention_mask)
+        loss = self.loss(y_hat, y)
+        self.train_losses.append(loss)
+        return loss
 
 
 class TextConditioner(BaseConditioner):
