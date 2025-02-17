@@ -25,6 +25,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
+from lightning.pytorch import LightningModule
 
 from .chroma import ChromaExtractor
 from .streaming import StreamingModule
@@ -44,8 +45,8 @@ TextCondition = tp.Optional[str]  # a text condition can be a string or None (if
 ConditionType = tp.Tuple[torch.Tensor, torch.Tensor]  # condition, mask
 
 class EmotionCondition(tp.NamedTuple):
-    arousal: torch.Tensor
-    valence: torch.Tensor
+    arousal: float
+    valence: float
 
 
 class WavCondition(tp.NamedTuple):
@@ -312,8 +313,7 @@ class NoopTokenizer(Tokenizer):
 
 
 class BaseConditioner(nn.Module):
-    """
-    Base model for all conditioner modules.
+    """Base model for all conditioner modules.
     We allow the output dim to be different than the hidden dim for two reasons:
     1) keep our LUTs small when the vocab is large;
     2) make all condition dims consistent.
@@ -329,8 +329,7 @@ class BaseConditioner(nn.Module):
         self.output_proj = nn.Linear(dim, output_dim)
 
     def tokenize(self, *args, **kwargs) -> tp.Any:
-        """
-        Should be any part of the processing that will lead to a synchronization
+        """Should be any part of the processing that will lead to a synchronization
         point, e.g. BPE tokenization with transfer to the GPU.
 
         The returned value will be saved and return later when calling forward().
@@ -338,8 +337,7 @@ class BaseConditioner(nn.Module):
         raise NotImplementedError()
 
     def forward(self, inputs: tp.Any) -> ConditionType:
-        """
-        Gets input that should be used as conditioning (e.g, genre, description or a waveform).
+        """Gets input that should be used as conditioning (e.g, genre, description or a waveform).
         Outputs a ConditionType, after the input data was embedded as a dense vector.
 
         Returns:
@@ -349,77 +347,6 @@ class BaseConditioner(nn.Module):
                 - And a mask indicating where the padding tokens.
         """
         raise NotImplementedError()
-
-
-import torch
-import typing as tp
-from torch import nn
-from audiocraft.modules.conditioners import BaseConditioner, EmotionCondition, ConditionType
-from lightning.pytorch import LightningModule
-
-class EmotionConditioner(LightningModule):
-    def __init__(self, n_tokens: int, output_dim: int, dropout: float):
-        super().__init__()
-        self.output_dim = output_dim
-        self.dropout = nn.Dropout(p=dropout)
-        self.n_tokens = n_tokens
-        self.relu = nn.ReLU()
-        self.save_hyperparameters()
-
-        total_output_size = n_tokens * 3 * output_dim
-
-        self.layers = nn.ModuleList([
-            nn.Linear(2, 512),
-            nn.Linear(512, 1024),
-            nn.Linear(1024, 1536),
-            nn.Linear(1536, total_output_size)
-        ])
-
-    def tokenize(self, conditions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
-        """
-        There is no point in tokenizing the emotional values,
-        this is just to keep in line with the API
-        """
-        arousal = []
-        valence = []
-
-        for condition in conditions:
-            arousal.append(condition.emotion['emotion'].arousal)
-            valence.append(condition.emotion['emotion'].valence)
-
-        arousal = torch.tensor(arousal)
-        valence = torch.tensor(valence)
-        x = torch.stack((arousal, valence), dim=1).float()
-
-        mask = torch.ones(len(arousal))
-
-        return {
-            'emotion_values': x,
-            'attention_mask': mask
-        }
-
-    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
-        x = inputs['emotion_values']
-
-        out = x
-        for layer in self.layers:
-            out = layer(out)
-            out = self.relu(out)
-            out = self.dropout(out)
-
-        out = out.view(self.n_tokens, 3, self.output_dim)
-        mask = torch.ones(self.n_tokens, 3, self.output_dim)
-
-        return out, mask
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        input_ids = x['input_ids']
-        attention_mask = x['attention_mask']
-        y_hat = self(input_ids, attention_mask)
-        loss = self.loss(y_hat, y)
-        self.train_losses.append(loss)
-        return loss
 
 
 class TextConditioner(BaseConditioner):
@@ -459,6 +386,64 @@ class LUTConditioner(TextConditioner):
         embeds = self.output_proj(embeds)
         embeds = (embeds * mask.unsqueeze(-1))
         return embeds, mask
+
+
+class EmotionConditioner(LightningModule):
+    def __init__(self, n_tokens: int, output_dim: int, dropout: float, device:str='cpu'):
+        super().__init__()
+        self.output_dim = output_dim
+        self.dropout = nn.Dropout(p=dropout)
+        self.n_tokens = n_tokens
+        self.relu = nn.ReLU()
+        self.save_hyperparameters()
+
+        total_output_size = n_tokens * output_dim
+        input_size = 2
+
+        self.layers = nn.ModuleList([
+            nn.Linear(input_size, 512),
+            nn.Linear(512, 1024),
+            nn.Linear(1024, output_dim)
+        ])
+        self.fc = nn.Linear(output_dim, total_output_size)
+
+    def tokenize(self, conditions: tp.List[tp.Optional[EmotionCondition]]) -> tp.Dict[str, torch.Tensor]:
+        """
+        There is no point in tokenizing the emotional values,
+        this is just to keep in line with the API
+        """
+        arousal = []
+        valence = []
+
+        for condition in conditions:
+            arousal.append(condition.arousal)
+            valence.append(condition.valence)
+
+        arousal = torch.tensor(arousal)
+        valence = torch.tensor(valence)
+
+        emotion_values = torch.stack((arousal, valence), dim=1).float()
+        mask = torch.ones(len(arousal))
+
+        return {
+            'emotion_values': emotion_values.to(self.device),
+            'attention_mask': mask.to(self.device)
+        }
+
+    def forward(self, inputs: tp.Dict[str, torch.Tensor]) -> ConditionType:
+        x = inputs['emotion_values']
+
+        out = x
+        for layer in self.layers:
+            out = layer(out)
+            out = self.relu(out)
+            out = self.dropout(out)
+        out = self.fc(out)
+
+        out = out.view(-1, self.n_tokens, self.output_dim)
+        mask = torch.ones(self.n_tokens, self.output_dim)
+
+        return out, mask
 
 
 class T5Conditioner(TextConditioner):
@@ -531,6 +516,7 @@ class T5Conditioner(TextConditioner):
 
     def tokenize(self, x: tp.List[tp.Optional[str]]) -> tp.Dict[str, torch.Tensor]:
         # if current sample doesn't have a certain attribute, replace with empty string
+        
         entries: tp.List[str] = [xi if xi is not None else "" for xi in x]
         if self.normalize_text:
             _, _, entries = self.text_normalizer(entries, return_text=True)
@@ -709,7 +695,6 @@ class ChromaStemConditioner(WaveformConditioner):
         with self.autocast:
             wav = convert_audio(
                 wav, sample_rate, self.demucs.samplerate, self.demucs.audio_channels)  # type: ignore
-    
             stems = apply_model(self.demucs, wav, device=self.device)  # type: ignore
             stems = stems[:, self.stem_indices]  # extract relevant stems for melody conditioning
             mix_wav = stems.sum(1)  # merge extracted stems to single waveform
@@ -1344,13 +1329,12 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
 
 
 def dropout_condition(sample: ConditioningAttributes, condition_type: str, condition: str) -> ConditioningAttributes:
-    """
-    Utility function for nullifying an attribute inside an ConditioningAttributes object.
+    """Utility function for nullifying an attribute inside an ConditioningAttributes object.
     If the condition is of type "wav", then nullify it using `nullify_condition` function.
     If the condition is of any other type, set its value to None.
     Works in-place.
     """
-    if condition_type not in ['text', 'wav', 'joint_embed', 'emotion']:
+    if condition_type not in ['text', 'wav', 'joint_embed']:
         raise ValueError(
             "dropout_condition got an unexpected condition type!"
             f" expected 'text', 'wav' or 'joint_embed' but got '{condition_type}'"
@@ -1366,8 +1350,6 @@ def dropout_condition(sample: ConditioningAttributes, condition_type: str, condi
     if condition_type == 'wav':
         wav_cond = sample.wav[condition]
         sample.wav[condition] = nullify_wav(wav_cond)
-    elif condition_type == 'emotion':
-        sample.emotion[condition] = None
     elif condition_type == 'joint_embed':
         embed = sample.joint_embed[condition]
         sample.joint_embed[condition] = nullify_joint_embed(embed)
@@ -1461,7 +1443,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
 
         # nullify conditions of all attributes
         samples = deepcopy(samples)
-        for condition_type in ["wav", "text", "emotion"]:
+        for condition_type in ["wav", "text"]:
             for sample in samples:
                 for condition in sample.attributes[condition_type]:
                     dropout_condition(sample, condition_type, condition)
@@ -1492,13 +1474,12 @@ class ConditioningProvider(nn.Module):
         return len(self.joint_embed_conditions) > 0
 
     @property
-    def emotion_conditions(self):
-        #return [k for k, v in self.conditioners.items() if isinstance(v, EmotionConditioner)]
-        return ['emotion']
-
-    @property
     def text_conditions(self):
         return [k for k, v in self.conditioners.items() if isinstance(v, TextConditioner)]
+
+    @property
+    def emotion_conditions(self):
+        return [k for k, v in self.conditioners.items() if isinstance(v, EmotionConditioner)]
 
     @property
     def wav_conditions(self):
@@ -1509,40 +1490,36 @@ class ConditioningProvider(nn.Module):
         return len(self.wav_conditions) > 0
 
     def tokenize(self, inputs: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.Any]:
-        """
-        Match attributes/wavs with existing conditioners in self, and compute tokenize them accordingly.
+        """Match attributes/wavs with existing conditioners in self, and compute tokenize them accordingly.
         This should be called before starting any real GPU work to avoid synchronization points.
         This will return a dict matching conditioner names to their arbitrary tokenized representations.
 
         Args:
             inputs (list[ConditioningAttributes]): List of ConditioningAttributes objects containing
-                text, wav and emotion conditions.
+                text and wav conditions.
         """
-        #assert all([isinstance(x, ConditioningAttributes) for x in inputs]), (
-        #    "Got unexpected types input for conditioner! should be tp.List[ConditioningAttributes]",
-        #    f" but types were {set([type(x) for x in inputs])}"
-        #)
+        assert all([isinstance(x, ConditioningAttributes) for x in inputs]), (
+            "Got unexpected types input for conditioner! should be tp.List[ConditioningAttributes]",
+            f" but types were {set([type(x) for x in inputs])}"
+        )
 
         output = {}
-        #text = self._collate_text(inputs)
-        #wavs = self._collate_wavs(inputs)
-        text = {}
-        wavs = {}
+        text = self._collate_text(inputs)
+        wavs = self._collate_wavs(inputs)
         emotions = self._collate_emotions(inputs)
         joint_embeds = self._collate_joint_embeds(inputs)
 
-        assert set(text.keys() | wavs.keys() | joint_embeds.keys() | emotions.keys()).issubset(set(self.conditioners.keys())), (
+        assert set(text.keys() | wavs.keys() | joint_embeds.keys()).issubset(set(self.conditioners.keys())), (
             f"Got an unexpected attribute! Expected {self.conditioners.keys()}, ",
             f"got {text.keys(), wavs.keys(), joint_embeds.keys()}"
         )
 
-        for attribute, batch in chain(text.items(), wavs.items(), joint_embeds.items(), emotions.items()):
+        for attribute, batch in chain(text.items(), wavs.items(), emotions.items(), joint_embeds.items()):
             output[attribute] = self.conditioners[attribute].tokenize(batch)
         return output
 
     def forward(self, tokenized: tp.Dict[str, tp.Any]) -> tp.Dict[str, ConditionType]:
-        """
-        Compute pairs of `(embedding, mask)` using the configured conditioners and the tokenized representations.
+        """Compute pairs of `(embedding, mask)` using the configured conditioners and the tokenized representations.
         The output is for example:
         {
             "genre": (torch.Tensor([B, 1, D_genre]), torch.Tensor([B, 1])),
@@ -1559,17 +1536,16 @@ class ConditioningProvider(nn.Module):
             output[attribute] = (condition, mask)
         return output
 
-    def _collate_emotions(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, EmotionCondition]:
-        #out: tp.Dict[str, EmotionCondition] = defaultdict(list)
-
-        emotions = [x for x in samples]
-        out = {'emotion': emotions}
+    def _collate_emotions(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
+        out: tp.Dict[str, tp.List[tp.Optional[str]]] = defaultdict(list)
+        emotions = [x.emotion for x in samples]
+        for emotion in emotions:
+            for condition in self.emotion_conditions:
+                out[condition].append(emotion[condition])
         return out
-    
 
     def _collate_text(self, samples: tp.List[ConditioningAttributes]) -> tp.Dict[str, tp.List[tp.Optional[str]]]:
-        """
-        Given a list of ConditioningAttributes objects, compile a dictionary where the keys
+        """Given a list of ConditioningAttributes objects, compile a dictionary where the keys
         are the attributes and the values are the aggregated input per attribute.
         For example:
         Input:
@@ -1694,8 +1670,7 @@ class ConditioningProvider(nn.Module):
 
 
 class ConditionFuser(StreamingModule):
-    """
-    Condition fuser handles the logic to combine the different conditions
+    """Condition fuser handles the logic to combine the different conditions
     to the actual model input.
 
     Args:
